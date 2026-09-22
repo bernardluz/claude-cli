@@ -1,0 +1,13 @@
+# Segredos e estado local: nunca versionar.
+bridge-key
+config.json
+logs/
+*.log
+sessions.json
+metrics.json
+
+# Dependências e backups
+node_modules/
+*.bak
+*.bak-*
+*.antigo

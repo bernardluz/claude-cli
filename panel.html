@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude CLI — adaptador</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f6f4; --card: #fff; --line: #e3e3de; --ink: #1d1d1b; --soft: #6b6b64;
+    --ok: #2e7d4f; --warn: #b8860b; --bad: #b3261e; --bar: #d8d8d2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #17171a; --card: #1f1f23; --line: #32323a; --ink: #ececec; --soft: #9a9aa2;
+            --ok: #6dd19b; --warn: #e0b64a; --bad: #ef8b84; --bar: #32323a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 20px; margin: 0 0 2px; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .06em; color: var(--soft); margin: 28px 0 10px; }
+  .sub { color: var(--soft); font-size: 13px; margin: 0 0 18px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .n { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .k { color: var(--soft); font-size: 13px; }
+  .bar { height: 8px; border-radius: 99px; background: var(--bar); overflow: hidden; margin: 8px 0 4px; }
+  .bar > i { display: block; height: 100%; background: var(--ok); }
+  .bar.w > i { background: var(--warn); } .bar.b > i { background: var(--bad); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--soft); font-weight: 500; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .wrap { overflow-x: auto; }
+  .tag { font-size: 12px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--line); color: var(--soft); }
+  .tag.ok { color: var(--ok); } .tag.bad { color: var(--bad); }
+  .dim { color: var(--soft); }
+  footer { color: var(--soft); font-size: 12px; margin-top: 28px; }
+</style>
+<main>
+  <h1>Adaptador Claude CLI</h1>
+  <p class="sub" id="head">carregando…</p>
+
+  <h2>Assinatura</h2>
+  <div class="card" id="usage">—</div>
+
+  <h2>Requisições</h2>
+  <div class="card grid" id="totals"></div>
+
+  <h2>Por modelo</h2>
+  <div class="card wrap"><table id="models"></table></div>
+
+  <h2>Erros</h2>
+  <div class="card wrap" id="errors"></div>
+
+  <h2>Últimas chamadas</h2>
+  <div class="card wrap"><table id="recent"></table></div>
+
+  <footer id="foot"></footer>
+</main>
+<script>
+const n = v => (v ?? 0).toLocaleString('pt-BR');
+const pct = (a, b) => b > 0 ? Math.round(a / b * 100) + '%' : '—';
+const esc = s => String(s ?? '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+const hora = s => s ? new Date(s).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—';
+const quando = s => {
+  if (!s) return '—';
+  const min = Math.round((new Date(s) - Date.now()) / 60000);
+  if (min <= 0) return 'agora';
+  if (min < 60) return 'em ' + min + ' min';
+  const h = Math.round(min / 60);
+  return h < 48 ? 'em ' + h + ' h' : 'em ' + Math.round(h / 24) + ' dias';
+};
+
+function barra(w) {
+  const cls = w.used >= 90 ? 'bar b' : w.used >= 70 ? 'bar w' : 'bar';
+  return `<div style="margin:6px 0 14px">
+    <div style="display:flex;justify-content:space-between"><span>${esc(w.label)}</span><span class="dim">${w.used}% · reseta ${quando(w.resetsAt)}</span></div>
+    <div class="${cls}"><i style="width:${Math.max(w.used, 1)}%"></i></div></div>`;
+}
+
+function tabela(cols, linhas) {
+  const head = '<tr>' + cols.map(c => `<th class="${c.num ? 'num' : ''}">${esc(c.t)}</th>`).join('') + '</tr>';
+  const body = linhas.map(l => '<tr>' + cols.map(c => `<td class="${c.num ? 'num' : ''}">${c.f(l)}</td>`).join('') + '</tr>').join('');
+  return head + body;
+}
+
+async function tick() {
+  let d;
+  try { d = await (await fetch('/stats', { cache: 'no-store' })).json(); }
+  catch { document.getElementById('head').textContent = 'adaptador fora do ar'; return; }
+  const t = d.metrics.totals;
+  document.getElementById('head').innerHTML =
+    `<span class="tag ${d.status === 'ready' ? 'ok' : 'bad'}">${esc(d.status)}</span> ·
+     Claude Code ${esc(d.cli?.version || '?')} · ${n(d.active)} em execução ·
+     ${n(d.sessions?.active)} sessões vivas · contando desde ${hora(d.metrics.since)}`;
+
+  const u = d.usage;
+  document.getElementById('usage').innerHTML = u.windows?.length
+    ? u.windows.map(barra).join('') + `<div class="dim" style="font-size:12px">consultado ${hora(u.checkedAt)}</div>`
+    : `<span class="dim">${esc(u.error || 'sem dados')}</span>`;
+
+  document.getElementById('totals').innerHTML = [
+    ['requisições', n(t.requests)],
+    ['concluídas', n(t.ok)],
+    ['falhas', n(t.failed)],
+    ['canceladas', n(t.cancelled)],
+    ['sessão retomada', pct(t.resumed, t.ok)],
+    ['do cache', pct(t.cached, t.prompt)],
+    ['tokens novos', n(t.prompt - t.cached)],
+    ['tokens de saída', n(t.output)],
+  ].map(([k, v]) => `<div><div class="n">${v}</div><div class="k">${k}</div></div>`).join('');
+
+  document.getElementById('models').innerHTML = tabela([
+    { t: 'modelo', f: m => esc(m.model) },
+    { t: 'chamadas', num: 1, f: m => n(m.requests) },
+    { t: 'falhas', num: 1, f: m => n(m.failed) },
+    { t: 'retomadas', num: 1, f: m => pct(m.resumed, m.ok) },
+    { t: 'cache', num: 1, f: m => pct(m.cached, m.prompt) },
+    { t: 'entrada nova', num: 1, f: m => n(m.prompt - m.cached) },
+    { t: 'saída', num: 1, f: m => n(m.output) },
+  ], d.metrics.models);
+
+  document.getElementById('errors').innerHTML = d.metrics.errors.length
+    ? '<table>' + tabela([{ t: 'código', f: e => esc(e.code) }, { t: 'ocorrências', num: 1, f: e => n(e.count) }], d.metrics.errors) + '</table>'
+    : '<span class="dim">nenhum erro registrado</span>';
+
+  document.getElementById('recent').innerHTML = tabela([
+    { t: 'hora', f: r => hora(r.at) },
+    { t: 'modelo', f: r => esc(r.model) },
+    { t: 'status', f: r => `<span class="tag ${r.status === 200 ? 'ok' : 'bad'}">${r.status}${r.code ? ' ' + esc(r.code) : ''}</span>` },
+    { t: 'sessão', f: r => r.resumed ? 'retomada' : (r.session ? 'nova' : '—') },
+    { t: 'esforço', f: r => esc(r.effort || '—') },
+    { t: 'entrada nova', num: 1, f: r => n(r.prompt - r.cached) },
+    { t: 'cache', num: 1, f: r => n(r.cached) },
+    { t: 'saída', num: 1, f: r => n(r.output) },
+  ], d.metrics.recent);
+
+  document.getElementById('foot').textContent = 'atualiza a cada 10 s · ' + new Date().toLocaleTimeString('pt-BR');
+}
+tick();
+setInterval(tick, 10000);
+</script>
+</html>

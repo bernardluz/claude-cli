@@ -1,0 +1,16 @@
+{
+  "host": "127.0.0.1",
+  "port": 8320,
+  "keyFile": "/caminho/para/bridge-key",
+  "executable": "/caminho/para/claude",
+  "configDir": "/caminho/para/.claude",
+  "tempRoot": "/tmp",
+  "maxConcurrent": 3,
+  "timeoutMs": 300000,
+  "sessions": { "enabled": true, "ttlMinutes": 60 },
+  "models": [
+    "claude-haiku-4-5-20251001",
+    "claude-sonnet-5",
+    "claude-opus-5"
+  ]
+}
