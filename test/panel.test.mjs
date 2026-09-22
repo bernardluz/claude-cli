@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createMetrics } from '../metrics.mjs';
-import { createUsageReader, normalizeUsage } from '../usage.mjs';
+import { createUsageReader, normalizeUsage, normalizeBreakdown } from '../usage.mjs';
 import { createBridge } from '../bridge.mjs';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -39,11 +39,38 @@ test('metrics never keep prompt text and survive a restart through drain/load', 
   assert.equal(other.snapshot().totals.requests, 1);
 });
 
-test('subscription windows are normalised and clamped', () => {
-  const windows = normalizeUsage({ five_hour: { utilization: 3, resets_at: '2026-09-22T08:10:00+00:00' },
-    seven_day: { utilization: 130, resets_at: null }, seven_day_opus: { utilization: -5, resets_at: null }, outra: { utilization: 9 } });
-  assert.deepEqual(windows.map(w => [w.label, w.used]), [['5 horas', 3], ['7 dias', 100], ['7 dias (Opus)', 0]]);
+test('the per-model caps come from `limits`, including the one the fixed keys never carry', () => {
+  const payload = {
+    five_hour: { utilization: 4, resets_at: '2026-09-22T08:10:00+00:00' },
+    seven_day: { utilization: 13, resets_at: '2026-09-28T09:00:00+00:00' },
+    seven_day_opus: null,
+    limits: [
+      { kind: 'session', percent: 4, severity: 'normal', resets_at: '2026-09-22T08:10:00+00:00', scope: null, is_active: false },
+      { kind: 'weekly_all', percent: 13, severity: 'normal', resets_at: '2026-09-28T09:00:00+00:00', scope: null, is_active: true },
+      { kind: 'weekly_scoped', percent: 8, severity: 'warning', resets_at: '2026-09-28T09:00:00+00:00', scope: { model: { display_name: 'Fable' } }, is_active: false },
+    ],
+  };
+  const windows = normalizeUsage(payload);
+  assert.deepEqual(windows.map(w => [w.label, w.used]), [['5 horas', 4], ['7 dias', 13], ['7 dias · Fable', 8]]);
+  assert.equal(windows[1].active, true);
+  assert.equal(windows[2].severity, 'warning');
   assert.equal(windows[0].resetsAt, '2026-09-22T08:10:00.000Z');
+});
+
+test('without `limits` the older fixed windows still answer, clamped', () => {
+  const windows = normalizeUsage({ five_hour: { utilization: 3, resets_at: null }, seven_day: { utilization: 130 },
+    seven_day_opus: { utilization: -5 }, outra: { utilization: 9 } });
+  assert.deepEqual(windows.map(w => [w.label, w.used]), [['5 horas', 3], ['7 dias', 100], ['7 dias (Opus)', 0]]);
+});
+
+test('the weekly breakdown keeps only what was actually spent, largest first', () => {
+  const rows = normalizeBreakdown({ seven_day_breakdown: { rows: [
+    { key: 'chat', display_name: 'Chats', percent: 0 },
+    { key: 'claude_code', display_name: 'Claude Code', percent: 96 },
+    { key: 'cowork', display_name: 'Cowork', percent: 4 },
+  ] } });
+  assert.deepEqual(rows, [{ label: 'Claude Code', used: 96 }, { label: 'Cowork', used: 4 }]);
+  assert.deepEqual(normalizeBreakdown({}), []);
 });
 
 test('a failed usage lookup reports a reason without leaking the token, and is cached', async () => {
@@ -69,9 +96,12 @@ test('a missing Claude Code login is reported as such, and a good answer carries
 
   const dir = await mkdtemp(join(tmpdir(), 'usage-ok-'));
   await writeFile(join(dir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 't' } }));
-  const read = createUsageReader({ configDir: dir, fetchImpl: async () => ({ ok: true, json: async () => ({ five_hour: { utilization: 3, resets_at: null } }) }) });
+  const read = createUsageReader({ configDir: dir, fetchImpl: async () => ({ ok: true, json: async () => ({
+    limits: [{ kind: 'weekly_scoped', percent: 8, resets_at: null, scope: { model: { display_name: 'Fable' } } }],
+    seven_day_breakdown: { rows: [{ display_name: 'Claude Code', percent: 96 }] } }) }) });
   const value = await read();
-  assert.equal(value.windows[0].used, 3);
+  assert.deepEqual(value.windows[0], { label: '7 dias · Fable', used: 8, resetsAt: null, severity: null, active: false });
+  assert.deepEqual(value.breakdown, [{ label: 'Claude Code', used: 96 }]);
   assert.ok(value.checkedAt);
   await rm(dir, { recursive: true, force: true });
 });

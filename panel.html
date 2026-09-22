@@ -72,9 +72,11 @@ const quando = s => {
 };
 
 function barra(w) {
-  const cls = w.used >= 90 ? 'bar b' : w.used >= 70 ? 'bar w' : 'bar';
+  const grave = w.severity && w.severity !== 'normal';
+  const cls = w.used >= 90 || grave ? 'bar b' : w.used >= 70 ? 'bar w' : 'bar';
+  const marca = w.active ? ' <span class="tag">em uso</span>' : '';
   return `<div style="margin:6px 0 14px">
-    <div style="display:flex;justify-content:space-between"><span>${esc(w.label)}</span><span class="dim">${w.used}% · reseta ${quando(w.resetsAt)}</span></div>
+    <div style="display:flex;justify-content:space-between;gap:12px"><span>${esc(w.label)}${marca}</span><span class="dim">${w.used}% · reseta ${quando(w.resetsAt)}</span></div>
     <div class="${cls}"><i style="width:${Math.max(w.used, 1)}%"></i></div></div>`;
 }
 
@@ -95,8 +97,11 @@ async function tick() {
      ${n(d.sessions?.active)} sessões vivas · contando desde ${hora(d.metrics.since)}`;
 
   const u = d.usage;
+  const reparte = (u.breakdown || []).map(b => `${esc(b.label)} ${b.used}%`).join(' · ');
   document.getElementById('usage').innerHTML = u.windows?.length
-    ? u.windows.map(barra).join('') + `<div class="dim" style="font-size:12px">consultado ${hora(u.checkedAt)}</div>`
+    ? u.windows.map(barra).join('')
+      + (reparte ? `<div class="dim" style="font-size:12px;margin-bottom:4px">semana gasta em: ${reparte}</div>` : '')
+      + `<div class="dim" style="font-size:12px">consultado ${hora(u.checkedAt)}</div>`
     : `<span class="dim">${esc(u.error || 'sem dados')}</span>`;
 
   document.getElementById('totals').innerHTML = [
