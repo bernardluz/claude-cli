@@ -154,6 +154,7 @@ export function prepareRequest(body, models) {
   const promptFor = entries => header + '\n' + JSON.stringify(entries) + footer;
   return {
     model: body.model, system: systems.join('\n\n'),
+    subject: subjectOf(history),
     prompt: promptFor(history), promptFor, history,
     images,
     schema, validators, forced, required: choice === 'required', parallel: body.parallel_tool_calls !== false,
@@ -209,6 +210,29 @@ export function decodeResult(raw, req) {
   } };
 }
 
+// Who called and what the turn is about, for the local panel. `origin` is the client's own
+// user agent, trimmed; `subject` is the latest human instruction, with the client's boilerplate
+// blocks stripped and cut short. Both stay on this machine, in the same log this adapter already
+// writes, and are never sent to the model.
+export function originOf(headers = {}) {
+  const raw = headers['x-title'] || headers['x-app'] || headers['user-agent'] || '';
+  const text = String(raw).split(/[;(]/)[0].replace(/\s+/g, ' ').trim();
+  return text ? text.slice(0, 40) : null;
+}
+
+const BOILERPLATE = /<system-reminder>[\s\S]*?<\/system-reminder>|<environment_details>[\s\S]*?<\/environment_details>|<[^>]{1,40}>/g;
+
+export function subjectOf(history = []) {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const entry = history[i];
+    if (entry.role !== 'user' || entry.tool_call_id) continue;
+    const text = String(entry.content || '').replace(BOILERPLATE, ' ').replace(/```[\s\S]*?```/g, ' ')
+      .replace(/\s+/g, ' ').trim();
+    if (text.length >= 3) return text.slice(0, 110);
+  }
+  return null;
+}
+
 const json = (res, status, data) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(data)); };
 const authEquals = (a, b) => { const x = Buffer.from(a || ''); const y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); };
 
@@ -231,6 +255,7 @@ export function createBridge({ models, key, run, maxBodyBytes = 16 * 1024 * 1024
   let active = 0;
   return async (request, response) => {
     const id = `chatcmpl-${randomUUID()}`;
+    const origin = originOf(request.headers);
     if (request.method === 'GET' && request.url === '/health') {
       // `cli` reports the flag compatibility check; a failed check is the first thing to look at.
       const extra = status();
@@ -265,7 +290,7 @@ export function createBridge({ models, key, run, maxBodyBytes = 16 * 1024 * 1024
     if (isMessages) {
       try {
         const body = await readBody(request, maxBodyBytes, controller.signal);
-        await messages.handle({ body, id, response, signal: controller.signal });
+        await messages.handle({ body, id, response, signal: controller.signal, origin });
       } catch (error) {
         const e = messages.anthropicError(error);
         if (!response.destroyed && !response.headersSent) json(response, e.status, e.body);
@@ -306,7 +331,8 @@ export function createBridge({ models, key, run, maxBodyBytes = 16 * 1024 * 1024
         response.end('data: [DONE]\n\n');
       } else json(response, 200, { id, object: 'chat.completion', created, model: req.model,
         choices: [{ index: 0, message: result.message, finish_reason: result.finish_reason }], usage: result.usage });
-      log({ id, model: req.model, status: 200, effort: req.effort || 'default', ...(result.session ? { session: result.session.id.slice(0, 8), resumed: result.session.resumed } : {}), ...result.usage });
+      log({ id, model: req.model, status: 200, effort: req.effort || 'default', origin, subject: req.subject,
+        ...(result.session ? { session: result.session.id.slice(0, 8), resumed: result.session.resumed } : {}), ...result.usage });
     } catch (error) {
       const status = error.status || 500;
       const envelope = { error: { message: error.status ? error.message : 'Internal bridge error.', type: 'api_error', code: error.code || 'bridge_error' } };
@@ -314,7 +340,7 @@ export function createBridge({ models, key, run, maxBodyBytes = 16 * 1024 * 1024
         if (response.headersSent) { send(envelope); response.end('data: [DONE]\n\n'); }
         else json(response, status, envelope);
       }
-      log({ id, model: req?.model, status, code: envelope.error.code, ...(error.detail ? { detail: error.detail } : {}) });
+      log({ id, model: req?.model, status, code: envelope.error.code, origin, subject: req?.subject, ...(error.detail ? { detail: error.detail } : {}) });
     } finally {
       clearInterval(heartbeat); response.off('close', disconnect); active--;
     }

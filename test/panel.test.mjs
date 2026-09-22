@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createMetrics } from '../metrics.mjs';
 import { createUsageReader, normalizeUsage, normalizeBreakdown } from '../usage.mjs';
-import { createBridge } from '../bridge.mjs';
+import { createBridge, originOf, subjectOf } from '../bridge.mjs';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -121,4 +121,29 @@ test('the panel and its data are served without the bridge key and carry no secr
   const denied = await fetch(base + '/v1/chat/completions', { method: 'POST', body: '{}' });
   assert.equal(denied.status, 401);
   await new Promise(r => server.close(r));
+});
+
+test('origin comes from the client agent and subject from the latest human turn', () => {
+  assert.equal(originOf({ 'user-agent': 'factory-cli/0.223.0 (node; win32)' }), 'factory-cli/0.223.0');
+  assert.equal(originOf({ 'user-agent': 'OpenAI/JS 6.25.0', 'x-title': 'Codex' }), 'Codex');
+  assert.equal(originOf({}), null);
+
+  // The client's boilerplate and code blocks are stripped; tool results are not instructions.
+  const history = [
+    { role: 'user', content: 'primeira tarefa' },
+    { role: 'assistant', content: '', tool_calls: [{ id: 'c1', name: 'f', arguments: '{}' }] },
+    { role: 'tool', content: 'resultado enorme da ferramenta', tool_call_id: 'c1' },
+    { role: 'user', content: '<system-reminder>ruído</system-reminder>\n\nAgora corrija o gate do CI\n```js\ncodigo()\n```' },
+  ];
+  assert.equal(subjectOf(history), 'Agora corrija o gate do CI');
+  assert.equal(subjectOf([{ role: 'tool', content: 'x', tool_call_id: 'c1' }]), null);
+  assert.equal(subjectOf([{ role: 'user', content: 'x'.repeat(300) }]).length, 110);
+});
+
+test('the panel rows carry origin and subject, truncated', () => {
+  const m = createMetrics();
+  m.record(ok({ origin: 'factory-cli/0.223.0', subject: 'a'.repeat(200) }));
+  const row = m.snapshot().recent[0];
+  assert.equal(row.origin, 'factory-cli/0.223.0');
+  assert.equal(row.subject.length, 110);
 });

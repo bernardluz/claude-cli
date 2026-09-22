@@ -31,8 +31,8 @@ vez de consumir a assinatura por dezenas de turnos.
 - `/v1/chat/completions` e `/v1/messages`, com streaming em ambos.
 - Chamadas de função, `tool_choice`, paralelismo e imagens.
 - Sessões com retomada, TTL configurável e limpeza dos transcritos.
-- Painel em `/panel`: consumo da assinatura, requisições, cache, erros e últimas
-  chamadas. Dados somente leitura, sem nenhum texto de prompt.
+- Painel em `/panel`: consumo da assinatura por janela e por modelo, requisições,
+  cache, erros e últimas chamadas, com a origem e o assunto de cada uma.
 - `/health` com verificação periódica das flags exigidas do CLI.
 - Erros temporários do provedor viram 503 retentável, e não 502 definitivo.
 
@@ -79,7 +79,8 @@ métricas, consulta de assinatura e o painel. Nenhum teste chama a API real.
 - A chave local nunca aparece em log, resposta ou mensagem de erro.
 - O ambiente repassado ao CLI é limpo de variáveis de credencial.
 - O token da assinatura é lido apenas na consulta de consumo e nunca é devolvido.
-- Prompts não entram em métricas nem no painel.
+- O painel mostra o assunto de cada chamada, que é a última instrução humana
+  recortada. Fica só nesta máquina, no mesmo log que o adaptador já escreve.
 
 O histórico de implantação em servidor está em
 [docs/historico-vps.md](docs/historico-vps.md).

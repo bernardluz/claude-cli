@@ -27,6 +27,7 @@ export function createMetrics({ max = 400, now = Date.now } = {}) {
       const row = {
         at: now(), model, status: entry.status, code: entry.code || null, effort: entry.effort || null,
         session: entry.session || null, resumed: entry.resumed === true,
+        origin: entry.origin || null, subject: entry.subject ? String(entry.subject).slice(0, 110) : null,
         prompt: entry.prompt_tokens || 0, cached: usage.cached_tokens || 0, output: entry.completion_tokens || 0,
         detail: entry.detail ? String(entry.detail).slice(0, 160) : null,
       };
