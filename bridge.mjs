@@ -154,7 +154,7 @@ export function prepareRequest(body, models) {
   const promptFor = entries => header + '\n' + JSON.stringify(entries) + footer;
   return {
     model: body.model, system: systems.join('\n\n'),
-    subject: subjectOf(history),
+    ...taskOf(history),
     prompt: promptFor(history), promptFor, history,
     images,
     schema, validators, forced, required: choice === 'required', parallel: body.parallel_tool_calls !== false,
@@ -222,16 +222,27 @@ export function originOf(headers = {}) {
 
 const BOILERPLATE = /<system-reminder>[\s\S]*?<\/system-reminder>|<environment_details>[\s\S]*?<\/environment_details>|<[^>]{1,40}>/g;
 
-export function subjectOf(history = []) {
+// Factory's subagent prompts open with a header naming the task and the agent, which is a far
+// better label than the raw text. Anything else falls back to the latest human instruction.
+const TASK_TITLE = /^[ 	]*Task description:[ 	]*(.+)$/mi;
+const TASK_AGENT = /^[ 	]*Subagent type:[ 	]*([\w .-]{1,30})$/mi;
+
+export function taskOf(history = []) {
   for (let i = history.length - 1; i >= 0; i--) {
     const entry = history[i];
     if (entry.role !== 'user' || entry.tool_call_id) continue;
-    const text = String(entry.content || '').replace(BOILERPLATE, ' ').replace(/```[\s\S]*?```/g, ' ')
-      .replace(/\s+/g, ' ').trim();
-    if (text.length >= 3) return text.slice(0, 110);
+    const raw = String(entry.content || '');
+    const titled = TASK_TITLE.exec(raw);
+    if (titled) {
+      return { subject: titled[1].replace(/\s+/g, ' ').trim().slice(0, 110), agent: TASK_AGENT.exec(raw)?.[1].trim() || null };
+    }
+    const text = raw.replace(BOILERPLATE, ' ').replace(/```[\s\S]*?```/g, ' ').replace(/\s+/g, ' ').trim();
+    if (text.length >= 3) return { subject: text.slice(0, 110), agent: null };
   }
-  return null;
+  return { subject: null, agent: null };
 }
+
+export const subjectOf = history => taskOf(history).subject;
 
 const json = (res, status, data) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(data)); };
 const authEquals = (a, b) => { const x = Buffer.from(a || ''); const y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); };
@@ -331,7 +342,7 @@ export function createBridge({ models, key, run, maxBodyBytes = 16 * 1024 * 1024
         response.end('data: [DONE]\n\n');
       } else json(response, 200, { id, object: 'chat.completion', created, model: req.model,
         choices: [{ index: 0, message: result.message, finish_reason: result.finish_reason }], usage: result.usage });
-      log({ id, model: req.model, status: 200, effort: req.effort || 'default', origin, subject: req.subject,
+      log({ id, model: req.model, status: 200, effort: req.effort || 'default', origin, agent: req.agent, subject: req.subject,
         ...(result.session ? { session: result.session.id.slice(0, 8), resumed: result.session.resumed } : {}), ...result.usage });
     } catch (error) {
       const status = error.status || 500;
@@ -340,7 +351,7 @@ export function createBridge({ models, key, run, maxBodyBytes = 16 * 1024 * 1024
         if (response.headersSent) { send(envelope); response.end('data: [DONE]\n\n'); }
         else json(response, status, envelope);
       }
-      log({ id, model: req?.model, status, code: envelope.error.code, origin, subject: req?.subject, ...(error.detail ? { detail: error.detail } : {}) });
+      log({ id, model: req?.model, status, code: envelope.error.code, origin, agent: req?.agent, subject: req?.subject, ...(error.detail ? { detail: error.detail } : {}) });
     } finally {
       clearInterval(heartbeat); response.off('close', disconnect); active--;
     }

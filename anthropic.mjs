@@ -163,7 +163,7 @@ export function createMessagesHandler({ models, run, log = () => {} }) {
         send('message_stop', { type: 'message_stop' });
         response.end();
       }
-      log({ id, model: req.model, status: 200, effort: req.effort || 'default', api: 'messages', origin, subject: req.subject,
+      log({ id, model: req.model, status: 200, effort: req.effort || 'default', api: 'messages', origin, agent: req.agent, subject: req.subject,
         ...(result.session ? { session: result.session.id.slice(0, 8), resumed: result.session.resumed } : {}), ...result.usage });
     } catch (error) {
       const { status, body: envelope } = anthropicError(error);
@@ -171,7 +171,7 @@ export function createMessagesHandler({ models, run, log = () => {} }) {
         if (response.headersSent) { send('error', envelope); response.end(); }
         else { response.writeHead(status, { 'content-type': 'application/json' }); response.end(JSON.stringify(envelope)); }
       }
-      log({ id, model: req?.model || body?.model, status, api: 'messages', code: error.code || 'bridge_error', origin, subject: req?.subject, ...(error.detail ? { detail: error.detail } : {}) });
+      log({ id, model: req?.model || body?.model, status, api: 'messages', code: error.code || 'bridge_error', origin, agent: req?.agent, subject: req?.subject, ...(error.detail ? { detail: error.detail } : {}) });
     } finally { clearInterval(heartbeat); }
   };
 }

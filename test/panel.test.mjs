@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createMetrics } from '../metrics.mjs';
 import { createUsageReader, normalizeUsage, normalizeBreakdown } from '../usage.mjs';
-import { createBridge, originOf, subjectOf } from '../bridge.mjs';
+import { createBridge, originOf, subjectOf, taskOf } from '../bridge.mjs';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -146,4 +146,15 @@ test('the panel rows carry origin and subject, truncated', () => {
   const row = m.snapshot().recent[0];
   assert.equal(row.origin, 'factory-cli/0.223.0');
   assert.equal(row.subject.length, 110);
+});
+
+test('a Factory subagent prompt yields its own task title and agent name', () => {
+  const prompt = ['# Task Tool Invocation', '', 'Subagent type: worker', 'Task complexity: heavy',
+    'Task description: R2 re-review focal SC15', '', '## Context', 'texto enorme de contexto…'].join('\n');
+  assert.deepEqual(taskOf([{ role: 'user', content: prompt }]), { subject: 'R2 re-review focal SC15', agent: 'worker' });
+
+  // Sem o cabeçalho, continua valendo a última instrução limpa.
+  assert.deepEqual(taskOf([{ role: 'user', content: '<system-reminder>x</system-reminder> arruma o gate do CI' }]),
+    { subject: 'arruma o gate do CI', agent: null });
+  assert.deepEqual(taskOf([]), { subject: null, agent: null });
 });

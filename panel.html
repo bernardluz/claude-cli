@@ -133,7 +133,7 @@ async function tick() {
 
   document.getElementById('recent').innerHTML = tabela([
     { t: 'hora', f: r => hora(r.at) },
-    { t: 'origem', f: r => esc(r.origin || '—') },
+    { t: 'origem', f: r => esc(r.origin || '—') + (r.agent ? ` <span class="tag">${esc(r.agent)}</span>` : '') },
     { t: 'assunto', f: r => `<span title="${esc(r.subject || '')}">${esc(corta(r.subject, 48))}</span>` },
     { t: 'modelo', f: r => esc(r.model) },
     { t: 'status', f: r => `<span class="tag ${r.status === 200 ? 'ok' : 'bad'}">${r.status}${r.code ? ' ' + esc(r.code) : ''}</span>` },
