@@ -267,6 +267,8 @@ export function createBridge({ models, key, run, maxBodyBytes = 16 * 1024 * 1024
   return async (request, response) => {
     const id = `chatcmpl-${randomUUID()}`;
     const origin = originOf(request.headers);
+    const startedAt = Date.now();
+    const elapsed = () => Date.now() - startedAt;
     if (request.method === 'GET' && request.url === '/health') {
       // `cli` reports the flag compatibility check; a failed check is the first thing to look at.
       const extra = status();
@@ -301,7 +303,7 @@ export function createBridge({ models, key, run, maxBodyBytes = 16 * 1024 * 1024
     if (isMessages) {
       try {
         const body = await readBody(request, maxBodyBytes, controller.signal);
-        await messages.handle({ body, id, response, signal: controller.signal, origin });
+        await messages.handle({ body, id, response, signal: controller.signal, origin, elapsed });
       } catch (error) {
         const e = messages.anthropicError(error);
         if (!response.destroyed && !response.headersSent) json(response, e.status, e.body);
@@ -342,7 +344,7 @@ export function createBridge({ models, key, run, maxBodyBytes = 16 * 1024 * 1024
         response.end('data: [DONE]\n\n');
       } else json(response, 200, { id, object: 'chat.completion', created, model: req.model,
         choices: [{ index: 0, message: result.message, finish_reason: result.finish_reason }], usage: result.usage });
-      log({ id, model: req.model, status: 200, effort: req.effort || 'default', origin, agent: req.agent, subject: req.subject,
+      log({ id, model: req.model, status: 200, effort: req.effort || 'default', origin, agent: req.agent, subject: req.subject, stream: req.stream === true, ms: elapsed(),
         ...(result.session ? { session: result.session.id.slice(0, 8), resumed: result.session.resumed } : {}), ...result.usage });
     } catch (error) {
       const status = error.status || 500;
@@ -351,7 +353,7 @@ export function createBridge({ models, key, run, maxBodyBytes = 16 * 1024 * 1024
         if (response.headersSent) { send(envelope); response.end('data: [DONE]\n\n'); }
         else json(response, status, envelope);
       }
-      log({ id, model: req?.model, status, code: envelope.error.code, origin, agent: req?.agent, subject: req?.subject, ...(error.detail ? { detail: error.detail } : {}) });
+      log({ id, model: req?.model, status, code: envelope.error.code, origin, agent: req?.agent, subject: req?.subject, stream: req?.stream === true, ms: elapsed(), ...(error.detail ? { detail: error.detail } : {}) });
     } finally {
       clearInterval(heartbeat); response.off('close', disconnect); active--;
     }

@@ -42,7 +42,7 @@ export async function checkCliCompatibility({ executable, configDir, spawnProces
 }
 
 export function createRunner({ executable, configDir, tempRoot = tmpdir(), timeoutMs = 300000, spawnProcess = spawn, sessionsDir }) {
-  return async (request, { signal, onText = () => {} }) => {
+  return async (request, { signal, onText = () => {}, onThinking = () => {} }) => {
     if (signal?.aborted) throw failure('Client disconnected.', 499);
     const scratch = await mkdtemp(join(tempRoot, 'claude-cli-request-'));
     // Claude Code stores and looks up sessions per working directory: resumable requests must all
@@ -126,7 +126,15 @@ export function createRunner({ executable, configDir, tempRoot = tmpdir(), timeo
             continue;
           }
         }
-        if (event.type === 'stream_event' && event.event?.delta?.type === 'text_delta') onText(event.event.delta.text);
+        // Thinking is forwarded like the real API does: a client that sees nothing for minutes
+        // assumes the model died. It is never the answer, so it flows even under structured output.
+        const delta = event.type === 'stream_event' ? event.event?.delta : null;
+        if (delta?.type === 'text_delta') onText(delta.text);
+        // Claude Code redacts the reasoning itself: the delta arrives with an empty string and only
+        // an `estimated_tokens` hint. It is forwarded as it comes, never invented, because what the
+        // client needs is the proof that the model is still working.
+        else if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string') onThinking({ text: delta.thinking, tokens: delta.estimated_tokens ?? null });
+        else if (delta?.type === 'signature_delta' && typeof delta.signature === 'string') onThinking({ signature: delta.signature });
         if (event.type === 'result') result = event;
       }
       const exit = await closed;

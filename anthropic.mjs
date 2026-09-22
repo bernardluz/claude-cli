@@ -113,26 +113,54 @@ export function anthropicError(error) {
 }
 
 export function createMessagesHandler({ models, run, log = () => {} }) {
-  return async ({ body, id, response, signal, origin = null }) => {
+  return async ({ body, id, response, signal, origin = null, elapsed = () => null }) => {
     const req = prepareRequest(toChatBody(body), models);
     const created = () => ({ id: `msg_${id.replace(/^chatcmpl-/, '').replaceAll('-', '')}` });
     const send = (event, data) => { if (!response.destroyed) response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
     let started = false; let textOpen = false; let sentText = '';
+    // The thinking block is opened as soon as the model starts reasoning and closed before any
+    // answer block, so the indices stay contiguous and the stream matches the real API's shape.
+    let thinkingOpen = false; let thinkingIndex = 0; let textIndex = 0; let nextIndex = 0; let signature = null;
     const start = () => {
       if (started || response.headersSent || response.destroyed) return;
       started = true;
       response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', 'x-accel-buffering': 'no' });
       send('message_start', { type: 'message_start', message: { ...created(), type: 'message', role: 'assistant', model: req.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } } });
     };
+    const openThinking = () => {
+      if (thinkingOpen) return;
+      start();
+      thinkingIndex = nextIndex++;
+      send('content_block_start', { type: 'content_block_start', index: thinkingIndex, content_block: { type: 'thinking', thinking: '' } });
+      thinkingOpen = true;
+    };
+    const closeThinking = () => {
+      if (!thinkingOpen) return;
+      // One signature closes the block, as the API does, even when the CLI repeats it mid-stream.
+      if (signature) send('content_block_delta', { type: 'content_block_delta', index: thinkingIndex, delta: { type: 'signature_delta', signature } });
+      send('content_block_stop', { type: 'content_block_stop', index: thinkingIndex });
+      thinkingOpen = false;
+    };
     let heartbeat;
     if (req.stream) heartbeat = setInterval(() => { start(); send('ping', { type: 'ping' }); }, 15000);
     try {
-      const raw = await run(req, { signal, onText: text => {
-        if (!req.stream || req.schema || !text || response.destroyed) return;
-        start();
-        if (!textOpen) { send('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }); textOpen = true; }
-        sentText += text; send('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } });
-      } });
+      const raw = await run(req, {
+        signal,
+        onThinking: ({ text, signature: sig }) => {
+          if (!req.stream || response.destroyed) return;
+          if (typeof sig === 'string') { signature = sig; return; }
+          if (typeof text !== 'string') return;
+          openThinking();
+          send('content_block_delta', { type: 'content_block_delta', index: thinkingIndex, delta: { type: 'thinking_delta', thinking: text } });
+        },
+        onText: text => {
+          if (!req.stream || req.schema || !text || response.destroyed) return;
+          start();
+          closeThinking();
+          if (!textOpen) { textIndex = nextIndex++; send('content_block_start', { type: 'content_block_start', index: textIndex, content_block: { type: 'text', text: '' } }); textOpen = true; }
+          sentText += text; send('content_block_delta', { type: 'content_block_delta', index: textIndex, delta: { type: 'text_delta', text } });
+        },
+      });
       const result = decodeResult(raw, req);
       if (response.destroyed) return;
       if (!req.stream) {
@@ -140,12 +168,14 @@ export function createMessagesHandler({ models, run, log = () => {} }) {
         response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify(payload));
       } else {
         start();
+        closeThinking();
         const blocks = blocksOf(result.message);
-        let index = 0;
+        let index = nextIndex;
         for (const block of blocks) {
           if (block.type === 'text') {
             if (textOpen) {
               if (block.text.trim() !== sentText.trim()) throw failure('CLI final text does not match its streamed output.', 502, 'inconsistent_stream');
+              index = textIndex;
             } else {
               send('content_block_start', { type: 'content_block_start', index, content_block: { type: 'text', text: '' } });
               send('content_block_delta', { type: 'content_block_delta', index, delta: { type: 'text_delta', text: block.text } });
@@ -163,7 +193,7 @@ export function createMessagesHandler({ models, run, log = () => {} }) {
         send('message_stop', { type: 'message_stop' });
         response.end();
       }
-      log({ id, model: req.model, status: 200, effort: req.effort || 'default', api: 'messages', origin, agent: req.agent, subject: req.subject,
+      log({ id, model: req.model, status: 200, effort: req.effort || 'default', api: 'messages', origin, agent: req.agent, subject: req.subject, stream: req.stream === true, ms: elapsed(),
         ...(result.session ? { session: result.session.id.slice(0, 8), resumed: result.session.resumed } : {}), ...result.usage });
     } catch (error) {
       const { status, body: envelope } = anthropicError(error);
@@ -171,7 +201,7 @@ export function createMessagesHandler({ models, run, log = () => {} }) {
         if (response.headersSent) { send('error', envelope); response.end(); }
         else { response.writeHead(status, { 'content-type': 'application/json' }); response.end(JSON.stringify(envelope)); }
       }
-      log({ id, model: req?.model || body?.model, status, api: 'messages', code: error.code || 'bridge_error', origin, agent: req?.agent, subject: req?.subject, ...(error.detail ? { detail: error.detail } : {}) });
+      log({ id, model: req?.model || body?.model, status, api: 'messages', code: error.code || 'bridge_error', origin, agent: req?.agent, subject: req?.subject, stream: req?.stream === true, ms: elapsed(), ...(error.detail ? { detail: error.detail } : {}) });
     } finally { clearInterval(heartbeat); }
   };
 }

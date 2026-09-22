@@ -29,6 +29,8 @@ vez de consumir a assinatura por dezenas de turnos.
 ## Recursos
 
 - `/v1/chat/completions` e `/v1/messages`, com streaming em ambos.
+- Raciocínio repassado como bloco `thinking`, para que o cliente veja atividade
+  durante turnos longos em vez de concluir que o modelo travou.
 - Chamadas de função, `tool_choice`, paralelismo e imagens.
 - Sessões com retomada, TTL configurável e limpeza dos transcritos.
 - Painel em `/panel`: consumo da assinatura por janela e por modelo, requisições,

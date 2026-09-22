@@ -53,6 +53,13 @@ if (prompt.includes('HANG_PROCESS')) {
 } else {
   const text = imageCount ? `IMAGES:${imageCount}` : sessionResume ? `RESUMED:${sessionResume.slice(0, 8)}` : 'OK';
   send({ type: 'system', subtype: 'init', tools: [], mcp_servers: [] });
+  // THINK_FIRST makes the fake reason before answering, like the real CLI under --effort.
+  if (prompt.includes('THINK_FIRST')) {
+    send({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'thinking', thinking: '' } } });
+    send({ type: 'stream_event', event: { delta: { type: 'thinking_delta', thinking: '', estimated_tokens: 50 } } });
+    send({ type: 'stream_event', event: { delta: { type: 'signature_delta', signature: 'assinatura' } } });
+    send({ type: 'stream_event', event: { type: 'content_block_stop' } });
+  }
   send({ type: 'stream_event', event: { delta: { type: 'text_delta', text } } });
   send({ type: 'result', subtype: 'success', is_error: false, result: text, session_id: sessionResume || sessionCreate || 'none', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: sessionResume ? 500 : 0 } });
 }

@@ -84,6 +84,26 @@ test('/v1/messages streams the Anthropic event sequence with real text deltas', 
   });
 });
 
+test('thinking is streamed as its own block before the answer, so a slow turn never looks dead', async () => {
+  await withServer(async base => {
+    const res = await fetch(`${base}/v1/messages`, { method: 'POST', headers: { 'x-api-key': KEY, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: models[0], max_tokens: 100, stream: true, messages: [{ role: 'user', content: 'THINK_FIRST' }] }) });
+    const raw = await res.text();
+    const frames = raw.split('\n\n').filter(Boolean).map(f => JSON.parse(f.split('\n')[1].replace('data: ', '')));
+    const kinds = frames.map(f => f.type);
+    assert.deepEqual(kinds, ['message_start', 'content_block_start', 'content_block_delta', 'content_block_delta', 'content_block_stop',
+      'content_block_start', 'content_block_delta', 'content_block_stop', 'message_delta', 'message_stop']);
+    // O raciocínio ocupa o índice 0 e a resposta vem depois, no índice 1.
+    assert.equal(frames[1].content_block.type, 'thinking');
+    assert.equal(frames[1].index, 0);
+    assert.equal(frames[2].delta.thinking, ''); // o CLI redige o raciocínio; repassamos como vem
+    assert.equal(frames[3].delta.type, 'signature_delta');
+    assert.equal(frames[5].content_block.type, 'text');
+    assert.equal(frames[5].index, 1);
+    assert.match(raw, /"text_delta","text":"OK"/);
+  });
+});
+
 test('expired login on /v1/messages is an Anthropic-shaped 503, not a fake message', async () => {
   await withServer(async (base, logs) => {
     const res = await fetch(`${base}/v1/messages`, { method: 'POST', headers: { 'x-api-key': KEY, 'content-type': 'application/json' },

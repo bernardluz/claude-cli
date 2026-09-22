@@ -139,6 +139,8 @@ async function tick() {
     { t: 'status', f: r => `<span class="tag ${r.status === 200 ? 'ok' : 'bad'}">${r.status}${r.code ? ' ' + esc(r.code) : ''}</span>` },
     { t: 'sessão', f: r => r.resumed ? 'retomada' : (r.session ? 'nova' : '—') },
     { t: 'esforço', f: r => esc(r.effort || '—') },
+    { t: 'duração', num: 1, f: r => r.ms == null ? '—' : (r.ms / 1000).toFixed(0) + ' s' },
+    { t: 'fluxo', f: r => r.stream ? 'stream' : 'único' },
     { t: 'entrada nova', num: 1, f: r => n(r.prompt - r.cached) },
     { t: 'cache', num: 1, f: r => n(r.cached) },
     { t: 'saída', num: 1, f: r => n(r.output) },
